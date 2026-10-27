@@ -77,26 +77,50 @@ export function activate(context: vscode.ExtensionContext): CodeFlowApi {
             await treeProvider.refresh();
         }),
 
+        vscode.commands.registerCommand('flowVisualizer.selectRootClass', (type: FunctionNode) =>
+            graph.showClassGraph(type)),
+
         vscode.commands.registerCommand('flowVisualizer.showFlowAtCursor', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) return;
-            const adapter = registry.forFile(editor.document.uri.fsPath);
-            if (!adapter) {
-                vscode.window.showInformationMessage('Code Flow: this file type is not supported yet.');
-                return;
-            }
-            const line = editor.selection.active.line + 1;
-            const fns = await adapter.listFunctions(editor.document.uri.fsPath);
-            // Innermost declaration that contains the cursor.
-            const hit = fns
-                .filter(f => f.line <= line && line <= f.endLine)
-                .sort((a, b) => (a.endLine - a.line) - (b.endLine - b.line))[0];
+            const at = cursorContext();
+            if (!at) return;
+            const hit = innermostAt(await at.adapter.listFunctions(at.filePath), at.filePath, at.line);
             if (hit) await graph.showGraphForRoot(hit);
             else vscode.window.showInformationMessage('Code Flow: place the cursor inside a method.');
+        }),
+
+        vscode.commands.registerCommand('flowVisualizer.showClassFlowAtCursor', async () => {
+            const at = cursorContext();
+            if (!at?.adapter.listTypes) return;
+            const types = await at.adapter.listTypes(at.filePath);
+            // Inside a type → that type; elsewhere in a DI setup file (Program.cs) → its registrations.
+            const hit = innermostAt(types.filter(t => t.kind !== 'di'), at.filePath, at.line)
+                ?? types.find(t => t.kind === 'di');
+            if (hit) await graph.showClassGraph(hit);
+            else vscode.window.showInformationMessage('Code Flow: place the cursor inside a class.');
         })
     );
 
+    function cursorContext() {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) return undefined;
+        const filePath = editor.document.uri.fsPath;
+        const adapter = registry.forFile(filePath);
+        if (!adapter) {
+            vscode.window.showInformationMessage('Code Flow: this file type is not supported yet.');
+            return undefined;
+        }
+        return { adapter, filePath, line: editor.selection.active.line + 1 };
+    }
+
     return { registry, graph };
+}
+
+/** Innermost declaration in `filePath` that contains `line`. */
+function innermostAt(nodes: FunctionNode[], filePath: string, line: number): FunctionNode | undefined {
+    const same = (a: string) => path.resolve(a).toLowerCase() === path.resolve(filePath).toLowerCase();
+    return nodes
+        .filter(n => same(n.filePath) && n.line <= line && line <= n.endLine)
+        .sort((a, b) => (a.endLine - a.line) - (b.endLine - b.line))[0];
 }
 
 export function deactivate(): void {

@@ -1,9 +1,27 @@
 {
-  "name": "code-flow-visualizer",
-  "displayName": "Code Flow Visualizer",
-  "description": "Conditional inter-procedural call graph: see which function calls which, and under what condition.",
-  "version": "0.1.0",
-  "publisher": "local",
+  "name": "conditional-call-flow",
+  "displayName": "Conditional Call Flow",
+  "description": "See how C# code flows: function calls labelled with their branch conditions, and class flow — inheritance, DI registrations (AddScoped/AddSingleton), constructor injection and where objects are created.",
+  "version": "0.2.0",
+  "publisher": "vtzy137",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "keywords": [
+    "call graph",
+    "control flow",
+    "csharp",
+    "roslyn",
+    "visualization",
+    "dotnet",
+    "dependency injection",
+    "asp.net core",
+    "class diagram",
+    "architecture"
+  ],
+  "galleryBanner": {
+    "color": "#0b3d91",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -30,7 +48,7 @@
       "flowVisualizerContainer": [
         {
           "id": "flowVisualizer.functionsSidebar",
-          "name": "Functions in Active File"
+          "name": "Active File"
         }
       ]
     },
@@ -57,6 +75,17 @@
         "command": "flowVisualizer.selectRootFunction",
         "title": "Show Call Flow",
         "category": "Code Flow"
+      },
+      {
+        "command": "flowVisualizer.showClassFlowAtCursor",
+        "title": "Show Class Flow for Type at Cursor",
+        "category": "Code Flow",
+        "icon": "$(symbol-class)"
+      },
+      {
+        "command": "flowVisualizer.selectRootClass",
+        "title": "Show Class Flow",
+        "category": "Code Flow"
       }
     ],
     "menus": {
@@ -77,17 +106,26 @@
           "command": "flowVisualizer.showFlowAtCursor",
           "when": "editorLangId == csharp",
           "group": "navigation@99"
+        },
+        {
+          "command": "flowVisualizer.showClassFlowAtCursor",
+          "when": "editorLangId == csharp",
+          "group": "navigation@99"
         }
       ],
       "commandPalette": [
         {
           "command": "flowVisualizer.selectRootFunction",
           "when": "false"
+        },
+        {
+          "command": "flowVisualizer.selectRootClass",
+          "when": "false"
         }
       ]
     },
     "configuration": {
-      "title": "Code Flow Visualizer",
+      "title": "Conditional Call Flow",
       "properties": {
         "codeFlow.initialDepth": {
           "type": "number",
@@ -95,6 +133,13 @@
           "minimum": 1,
           "maximum": 6,
           "description": "How many call levels to load when a root function is selected. Deeper levels load on demand (right-click a node)."
+        },
+        "codeFlow.classInitialDepth": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 6,
+          "description": "How many levels the class flow follows automatically (dependencies, implementations, base classes). Consumers and creators of a class are shown for each expanded class but not followed."
         },
         "codeFlow.csharp.solutionPath": {
           "type": "string",
@@ -136,7 +181,7 @@
     "watch": "tsc -watch -p ./",
     "build": "npm run build:analyzer && npm run compile",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --allow-missing-repository --skip-license"
+    "package": "vsce package --allow-missing-repository"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

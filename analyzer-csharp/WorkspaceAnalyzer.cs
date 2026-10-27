@@ -36,12 +36,16 @@ public sealed class WorkspaceAnalyzer
     private MSBuildWorkspace? _workspace;
     private Solution? _solution;
     private Regex[] _ignore = [];
+    private readonly TypeIndex _types;
+
+    public WorkspaceAnalyzer() => _types = new TypeIndex(IsUserType);
 
     /// <summary>Loads one .sln/.slnx, or any number of .csproj files into a single solution.</summary>
     public async Task<object> InitAsync(string[] paths, string[] ignorePatterns)
     {
         if (paths.Length == 0) throw new ArgumentException("No .sln/.csproj path given.");
         _ignore = ignorePatterns.Select(p => new Regex(p, RegexOptions.Compiled)).ToArray();
+        _types.Clear();
 
         _workspace?.Dispose();
         _workspace = MSBuildWorkspace.Create();
@@ -103,6 +107,25 @@ public sealed class WorkspaceAnalyzer
             if (node != null) result.Add(node);
         }
         return result;
+    }
+
+    public async Task<List<FunctionNode>> ListTypesAsync(string filePath)
+    {
+        var doc = FindDocument(filePath);
+        return doc == null ? new() : await _types.ListTypesAsync(RequireSolution(), doc);
+    }
+
+    public Task<List<TypeRelation>> GetTypeRelationsAsync(string typeId) =>
+        _types.GetRelationsAsync(RequireSolution(), typeId);
+
+    /// <summary>A type declared in this solution's source (not framework/NuGet) and not ignored by the user.</summary>
+    private bool IsUserType(ITypeSymbol type, Solution solution)
+    {
+        if (type is not INamedTypeSymbol { TypeKind: not TypeKind.Error } named) return false;
+        var loc = named.Locations.FirstOrDefault(l => l.IsInSource);
+        if (loc?.SourceTree == null || solution.GetDocument(loc.SourceTree) == null) return false;
+        var fullName = named.OriginalDefinition.ToDisplayString();
+        return !_ignore.Any(r => r.IsMatch(fullName));
     }
 
     public async Task<List<CallEdge>> GetOutgoingCallsAsync(string symbolId)

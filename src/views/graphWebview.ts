@@ -1,22 +1,33 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { AdapterRegistry, CallEdge, FunctionNode } from '../parsers/languageAdapter';
+import { AdapterRegistry, FunctionNode } from '../parsers/languageAdapter';
 
-/** Edge as sent to the webview. */
+/**
+ * 'call'  — function call flow: arrows are calls, labelled with the branch condition.
+ * 'class' — class flow: inheritance, DI registration, constructor injection, object creation.
+ */
+export type GraphMode = 'call' | 'class';
+
+/** Edge as sent to the webview (both modes). */
 interface GraphEdge {
     id: string;
     source: string;
     target: string;
+    /** Style key. Call mode: direct | interface | virtual. Class mode: the relation kind. */
+    edgeKind: string;
+    /** Call mode: full path condition, split into &&-parts for guard hoisting. */
     condition: string;
     conditionParts: string[];
     context: string[];
-    dispatchKind: CallEdge['dispatchKind'];
+    /** Class mode: fixed label text. */
+    label?: string;
+    /** Where the edge is written in code (call site / base list / AddScoped / new). */
     callLine: number;
     callFilePath: string;
 }
 
 type ToWebview =
-    | { type: 'reset'; root: FunctionNode; direction: string }
+    | { type: 'reset'; root: FunctionNode; direction: string; mode: GraphMode }
     | { type: 'add'; nodes: FunctionNode[]; edges: GraphEdge[]; expanded: string[] }
     | { type: 'loading'; ids: string[]; on: boolean }
     | { type: 'error'; message: string };
@@ -29,7 +40,7 @@ type FromWebview =
     | { type: 'reroot'; id: string };
 
 /**
- * Center panel: Cytoscape.js graph rooted at the selected function.
+ * Center panel: Cytoscape.js graph rooted at the selected function or class.
  * The extension owns graph state; the webview only renders and forwards user intents.
  */
 export class GraphWebview implements vscode.Disposable {
@@ -37,8 +48,11 @@ export class GraphWebview implements vscode.Disposable {
     private webviewReady = false;
     private queue: ToWebview[] = [];
 
+    private mode: GraphMode = 'call';
     private nodes = new Map<string, FunctionNode>();
     private edges = new Map<string, GraphEdge>();
+    /** Per node: neighbours that automatic depth expansion continues to. */
+    private followers = new Map<string, Set<string>>();
     private expanded = new Set<string>();
     private inFlight = new Map<string, Promise<void>>();
     /** Bumped on every new root so results of a previous graph are dropped. */
@@ -50,20 +64,33 @@ export class GraphWebview implements vscode.Disposable {
         private readonly output: vscode.OutputChannel
     ) {}
 
-    async showGraphForRoot(root: FunctionNode): Promise<void> {
+    showGraphForRoot(root: FunctionNode): Promise<void> {
+        return this.show(root, 'call');
+    }
+
+    showClassGraph(root: FunctionNode): Promise<void> {
+        return this.show(root, 'class');
+    }
+
+    private async show(root: FunctionNode, mode: GraphMode): Promise<void> {
         this.ensurePanel();
         this.generation++;
+        this.mode = mode;
         this.nodes = new Map([[root.id, root]]);
         this.edges.clear();
+        this.followers.clear();
         this.expanded.clear();
         this.inFlight.clear();
 
-        this.panel!.title = `Flow: ${root.name}`;
+        this.panel!.title = `${mode === 'call' ? 'Flow' : 'Class'}: ${root.name}`;
         this.panel!.reveal(undefined, true);
-        const direction = vscode.workspace.getConfiguration('codeFlow').get<string>('layoutDirection', 'TB');
-        this.post({ type: 'reset', root, direction });
+        const config = vscode.workspace.getConfiguration('codeFlow');
+        const direction = config.get<string>('layoutDirection', 'TB');
+        this.post({ type: 'reset', root, direction, mode });
 
-        const depth = vscode.workspace.getConfiguration('codeFlow').get<number>('initialDepth', 2);
+        const depth = mode === 'call'
+            ? config.get<number>('initialDepth', 2)
+            : config.get<number>('classInitialDepth', 3);
         await this.expand(root.id, depth);
     }
 
@@ -85,10 +112,10 @@ export class GraphWebview implements vscode.Disposable {
         }
     }
 
-    /** Fetches outgoing calls of one node, returns ids of its callees. */
+    /** Fetches the relations of one node, returns the neighbours depth expansion should continue to. */
     private expandOne(id: string, gen: number): Promise<string[]> {
         const existing = this.inFlight.get(id);
-        if (existing) return existing.then(() => this.calleesOf(id));
+        if (existing) return existing.then(() => this.followersOf(id));
 
         const work = (async () => {
             const fn = this.nodes.get(id);
@@ -96,32 +123,20 @@ export class GraphWebview implements vscode.Disposable {
             if (!fn || !adapter) return;
 
             try {
-                const calls = await adapter.getOutgoingCalls(id);
+                const fetched = this.mode === 'call'
+                    ? await this.fetchCalls(adapter, id)
+                    : await this.fetchRelations(adapter, id);
                 if (gen !== this.generation) return;
 
                 const newNodes: FunctionNode[] = [];
-                const newEdges: GraphEdge[] = [];
-                for (const c of calls) {
-                    if (!this.nodes.has(c.target.id)) {
-                        this.nodes.set(c.target.id, c.target);
-                        newNodes.push(c.target);
-                    }
-                    const edgeId = `${id}->${c.target.id}@${c.callLine}:${c.condition}`;
-                    if (this.edges.has(edgeId)) continue;
-                    const edge: GraphEdge = {
-                        id: edgeId,
-                        source: id,
-                        target: c.target.id,
-                        condition: c.condition,
-                        conditionParts: c.conditionParts ?? [],
-                        context: c.context ?? [],
-                        dispatchKind: c.dispatchKind,
-                        callLine: c.callLine,
-                        callFilePath: c.callFilePath
-                    };
-                    this.edges.set(edgeId, edge);
-                    newEdges.push(edge);
+                for (const n of fetched.nodes) {
+                    if (this.nodes.has(n.id)) continue;
+                    this.nodes.set(n.id, n);
+                    newNodes.push(n);
                 }
+                const newEdges = fetched.edges.filter(e => !this.edges.has(e.id));
+                newEdges.forEach(e => this.edges.set(e.id, e));
+                this.followers.set(id, new Set([...(this.followers.get(id) ?? []), ...fetched.follow]));
                 this.expanded.add(id);
                 this.post({ type: 'add', nodes: newNodes, edges: newEdges, expanded: [id] });
             } catch (err: any) {
@@ -133,13 +148,46 @@ export class GraphWebview implements vscode.Disposable {
         this.inFlight.set(id, work);
         return work
             .finally(() => { if (this.inFlight.get(id) === work) this.inFlight.delete(id); })
-            .then(() => this.calleesOf(id));
+            .then(() => this.followersOf(id));
     }
 
-    private calleesOf(id: string): string[] {
-        const out: string[] = [];
-        for (const e of this.edges.values()) if (e.source === id) out.push(e.target);
-        return out;
+    private async fetchCalls(adapter: NonNullable<ReturnType<AdapterRegistry['forFile']>>, id: string) {
+        const calls = await adapter.getOutgoingCalls(id);
+        const edges: GraphEdge[] = calls.map(c => ({
+            id: `${id}->${c.target.id}@${c.callLine}:${c.condition}`,
+            source: id,
+            target: c.target.id,
+            edgeKind: c.dispatchKind,
+            condition: c.condition,
+            conditionParts: c.conditionParts ?? [],
+            context: c.context ?? [],
+            callLine: c.callLine,
+            callFilePath: c.callFilePath
+        }));
+        return { nodes: calls.map(c => c.target), edges, follow: calls.map(c => c.target.id) };
+    }
+
+    private async fetchRelations(adapter: NonNullable<ReturnType<AdapterRegistry['forFile']>>, id: string) {
+        if (!adapter.getTypeRelations) throw new Error('class view is not supported for this language yet');
+        const rels = await adapter.getTypeRelations(id);
+        const edges: GraphEdge[] = rels.map(r => ({
+            id: `${r.kind}:${r.source.id}->${r.target.id}:${r.label}`,
+            source: r.source.id,
+            target: r.target.id,
+            edgeKind: r.kind,
+            condition: '',
+            conditionParts: [],
+            context: [],
+            label: r.label,
+            callLine: r.line,
+            callFilePath: r.filePath
+        }));
+        const follow = rels.filter(r => r.follow).map(r => (r.source.id === id ? r.target.id : r.source.id));
+        return { nodes: rels.flatMap(r => [r.source, r.target]), edges, follow };
+    }
+
+    private followersOf(id: string): string[] {
+        return [...(this.followers.get(id) ?? [])];
     }
 
     private async onMessage(msg: FromWebview): Promise<void> {
@@ -164,7 +212,7 @@ export class GraphWebview implements vscode.Disposable {
             }
             case 'reroot': {
                 const fn = this.nodes.get(msg.id);
-                if (fn) await this.showGraphForRoot(fn);
+                if (fn) await this.show(fn, this.mode);
                 break;
             }
         }
@@ -226,14 +274,12 @@ export class GraphWebview implements vscode.Disposable {
     <button id="btn-expand3" title="Expand the selected node three more levels" disabled>Expand +3</button>
     <button id="btn-reroot" title="Make the selected node the root" disabled>Set as root</button>
     <span class="spacer"></span>
-    <span class="legend"><i class="sw direct"></i>direct</span>
-    <span class="legend"><i class="sw interface"></i>interface (DI)</span>
-    <span class="legend"><i class="sw virtual"></i>virtual/override</span>
+    <span id="legend"></span>
   </div>
   <div id="cy"></div>
   <div id="details" hidden></div>
   <div id="status"></div>
-  <div id="hint">Right-click a node (or <b>+</b>) to expand · double-click a node to open it · click an edge to jump to the call site</div>
+  <div id="hint"></div>
   <script nonce="${nonce}" src="${uri('lib', 'cytoscape.min.js')}"></script>
   <script nonce="${nonce}" src="${uri('lib', 'dagre.min.js')}"></script>
   <script nonce="${nonce}" src="${uri('lib', 'cytoscape-dagre.js')}"></script>

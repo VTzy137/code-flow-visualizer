@@ -10,7 +10,12 @@ export interface FunctionNode {
     name: string;
     signature: string;
     containingType: string;
-    kind: 'method' | 'constructor' | 'function';
+    /**
+     * Functions: 'method' | 'constructor' | 'function'.
+     * Types: 'class' | 'interface' | 'record' | 'struct' | 'enum' | 'controller' | 'background service' | ... ,
+     * and 'di' for a file that registers services.
+     */
+    kind: string;
     filePath: string;
     /** 1-based start line of the declaration. */
     line: number;
@@ -36,12 +41,32 @@ export interface CallEdge {
     callFilePath: string;
 }
 
+export type TypeRelationKind = 'inherits' | 'implements' | 'injects' | 'creates' | 'registers' | 'binds';
+
+/** Class-view relation. Arrows point from the dependent side: Derived→Base, Consumer→Dependency, DI→Service. */
+export interface TypeRelation {
+    source: FunctionNode;
+    target: FunctionNode;
+    kind: TypeRelationKind;
+    /** e.g. constructor parameter name, "new in Start()", "Scoped as IFoo". */
+    label: string;
+    /** Where the relation is written (base list, constructor parameter, `new`, `AddScoped`). */
+    filePath: string;
+    line: number;
+    /** Automatic depth expansion continues through this relation (dependencies, implementations, base types). */
+    follow: boolean;
+}
+
 export interface ILanguageAdapter {
     readonly languageId: string;
     readonly supportedExtensions: string[];
     initWorkspace(workspaceRoot: string): Promise<void>;
     listFunctions(filePath: string): Promise<FunctionNode[]>;
     getOutgoingCalls(functionId: string): Promise<CallEdge[]>;
+    /** Types declared in a file (plus a 'di' entry if the file registers services). Enables the class view. */
+    listTypes?(filePath: string): Promise<FunctionNode[]>;
+    /** Every relation touching a type, in both directions. */
+    getTypeRelations?(typeId: string): Promise<TypeRelation[]>;
     /** Push unsaved/changed file content so analysis stays current without reloading the project. */
     updateFile?(filePath: string, text: string): Promise<void>;
     dispose(): void;

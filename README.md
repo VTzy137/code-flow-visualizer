@@ -1,4 +1,4 @@
-# Code Flow Visualizer
+# Conditional Call Flow
 
 A VS Code extension that draws a **conditional call graph** rooted at a function you pick:
 if `A` calls `B` inside `if (x == value)`, the arrow `A → B` is labelled `x == value`.
@@ -13,7 +13,27 @@ public void Checkout(Order o) {
                                                  └──────────▶ OrderService.InvoiceLater
 ```
 
+It also has a **class flow** view for answering "where does this controller go, and where do these objects come from?"
+in apps wired with dependency injection:
+
+```
+DI · Program.cs ──Scoped as IMonitorService──▶ MonitorService
+MonitorController ──service──▶ IMonitorService ──DI Scoped──▶ MonitorService ──repo──▶ MonitorRepository
+                                                                    └──inherits──▷ ServiceBase
+```
+
 C# (.NET) is the first supported language. The analyzer is language-pluggable (see *Adding a language*).
+
+## Requirements
+
+- **.NET SDK 8 or newer** on the machine (`dotnet --list-sdks` should print something). The analyzer runs on it and uses
+  its MSBuild to load your projects.
+- For **.NET Framework** projects (old-style `.csproj`, e.g. WinForms/ASP.NET on `v4.x`): **Visual Studio** or
+  **Visual Studio Build Tools** with the .NET desktop / web build workload.
+- A folder containing a `.sln`, `.slnx` or `.csproj`.
+
+The first time a folder is opened the project is loaded in the background (a few seconds, shown in the status bar);
+after that every graph expansion is fast.
 
 ## What the analyzer understands (C#)
 
@@ -33,18 +53,39 @@ C# (.NET) is the first supported language. The analyzer is language-pluggable (s
 Only code that lives in your solution is drawn. `System.*`, `Microsoft.*` and other NuGet/framework calls are dropped
 automatically; add more with `codeFlow.ignorePatterns` (e.g. your logging wrapper).
 
+## Class flow
+
+| Arrow | Meaning | Found from |
+| --- | --- | --- |
+| `Derived ──▷ Base` (grey, hollow arrow) | inherits | base list |
+| `Class ┄┄▷ IInterface` (purple dashed, hollow) | implements | base list |
+| `Consumer ──param──▶ Dependency` (blue) | injected via constructor (incl. primary constructors, `IEnumerable<T>`, `Lazy<T>`, `IOptions<T>`) | constructor parameters |
+| `DI · Program.cs ┈Scoped as IFoo┈▶ Foo` (green dotted) | registered in the DI container | `AddSingleton` / `AddScoped` / `AddTransient` / `TryAdd*` / `AddHostedService` / `AddDbContext` / `AddHttpClient`, generic or `typeof(...)` or factory `sp => new Foo(...)` |
+| `IFoo ┄DI Scoped┄▶ Foo` (green dashed) | which implementation DI hands out for an interface | `AddScoped<IFoo, Foo>()` |
+| `Creator ──new in Start()──▶ Foo` (orange) | object created with `new` | `new Foo(...)` / `new()` |
+
+Nodes show the role of each type: **controller**, **background service**, **db context**, **signalr hub**, **razor page**,
+**form**, **interface**, **abstract class**, **record**… A file that registers services (e.g. `Program.cs`) gets a
+**DI · Program.cs** entry: open it to see every registered service, then follow each one to its dependencies.
+
+Opening a class follows its dependencies, implementations and base classes automatically
+(`codeFlow.classInitialDepth`, default 3). Who *uses* or *creates* a class is shown for every expanded class but not
+followed, so the graph stays focused; right-click any node to expand it.
+
 ## Using it
 
 1. Open a folder containing a `.sln`, `.slnx` or `.csproj`.
-2. Click the **Code Flow** icon in the activity bar. The sidebar lists the methods of the active `.cs` file, grouped by class.
-3. Click a method. The graph opens beside the editor with `codeFlow.initialDepth` levels (default 2) loaded.
+2. Click the **Code Flow** icon in the activity bar. The sidebar shows the active `.cs` file in two folders:
+   **Functions** (methods, grouped by class) and **Classes** (types, plus the DI entry if the file registers services).
+3. Click a function for its call flow, or a class for its class flow. The graph opens beside the editor.
 4. In the graph:
    - **Right-click** a node (or select it and press **Expand +1 / +3**) to load deeper calls. Nodes that are not expanded yet have a dashed border and a `＋`.
    - **Double-click** a node to open the function.
    - **Click an edge** to jump to the exact call site and see the full condition.
    - **Set as root** re-centres the graph on the selected node. **Direction** switches between top-to-bottom and left-to-right.
 
-You can also right-click inside a method in the editor and choose **Show Call Flow for Function at Cursor**.
+You can also right-click in the editor and choose **Show Call Flow for Function at Cursor** or
+**Show Class Flow for Type at Cursor** (in `Program.cs` outside any class, this opens the DI registrations).
 
 Unsaved edits are pushed to the analyzer as you type, so the graph reflects the current buffer.
 Use **Reload Workspace** (sidebar title bar) after adding projects or files.
@@ -64,8 +105,8 @@ npm run build        # builds the Roslyn daemon into dist/analyzer and compiles 
 **Install as a .vsix:**
 
 ```bash
-npm run package                                        # creates code-flow-visualizer-0.1.0.vsix
-code --install-extension code-flow-visualizer-0.1.0.vsix
+npm run package                                        # creates conditional-call-flow-0.2.0.vsix
+code --install-extension conditional-call-flow-0.2.0.vsix
 ```
 
 The `.vsix` contains the compiled analyzer, so the target machine only needs the .NET runtime/SDK.
@@ -74,7 +115,8 @@ The `.vsix` contains the compiled analyzer, so the target machine only needs the
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `codeFlow.initialDepth` | `2` | Levels loaded when a root is selected |
+| `codeFlow.initialDepth` | `2` | Call levels loaded when a function is selected |
+| `codeFlow.classInitialDepth` | `3` | Levels the class flow follows automatically |
 | `codeFlow.csharp.solutionPath` | `""` | Force a specific `.sln` / `.csproj` (otherwise the top-most `.sln`, else every `.csproj`) |
 | `codeFlow.csharp.dotnetPath` | `dotnet` | dotnet executable used to start the analyzer |
 | `codeFlow.ignorePatterns` | logging calls | Regexes matched against `Namespace.Type.Method` |

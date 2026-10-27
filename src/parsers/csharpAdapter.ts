@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
-import { CallEdge, FunctionNode, ILanguageAdapter } from './languageAdapter';
+import { CallEdge, FunctionNode, ILanguageAdapter, TypeRelation } from './languageAdapter';
 
 interface Pending {
     resolve: (data: any) => void;
@@ -58,6 +58,16 @@ export class CSharpDaemonAdapter implements ILanguageAdapter {
         return this.send<CallEdge[]>('get_calls', { symbolId: functionId });
     }
 
+    async listTypes(filePath: string): Promise<FunctionNode[]> {
+        await this.ready();
+        return this.send<FunctionNode[]>('list_types', { filePath });
+    }
+
+    async getTypeRelations(typeId: string): Promise<TypeRelation[]> {
+        await this.ready();
+        return this.send<TypeRelation[]>('get_type_relations', { typeId });
+    }
+
     async updateFile(filePath: string, text: string): Promise<void> {
         if (!this.initPromise) return;
         await this.ready();
@@ -96,7 +106,7 @@ export class CSharpDaemonAdapter implements ILanguageAdapter {
             return [path.isAbsolute(configured) ? configured : path.join(workspaceRoot, configured)];
         }
 
-        const exclude = '**/{node_modules,bin,obj,.git}/**';
+        const exclude = '**/{node_modules,bin,obj,.git,.vs}/**';
         const depth = (u: vscode.Uri) => u.fsPath.split(/[\\/]/).length;
 
         const solutions = await vscode.workspace.findFiles('**/*.{sln,slnx}', exclude, 50);

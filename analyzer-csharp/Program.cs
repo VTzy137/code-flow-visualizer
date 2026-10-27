@@ -32,6 +32,8 @@ while ((line = await Console.In.ReadLineAsync()) != null)
                 ReadStringArray(req, "ignorePatterns")),
             "list_functions" => await analyzer.ListFunctionsAsync(req.GetProperty("filePath").GetString()!),
             "get_calls" => await analyzer.GetOutgoingCallsAsync(req.GetProperty("symbolId").GetString()!),
+            "list_types" => await analyzer.ListTypesAsync(req.GetProperty("filePath").GetString()!),
+            "get_type_relations" => await analyzer.GetTypeRelationsAsync(req.GetProperty("typeId").GetString()!),
             "update_file" => analyzer.UpdateFile(
                 req.GetProperty("filePath").GetString()!,
                 req.GetProperty("text").GetString()!),
