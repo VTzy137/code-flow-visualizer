@@ -1,0 +1,150 @@
+{
+  "name": "code-flow-visualizer",
+  "displayName": "Code Flow Visualizer",
+  "description": "Conditional inter-procedural call graph: see which function calls which, and under what condition.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:csharp",
+    "workspaceContains:**/*.csproj"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "flowVisualizerContainer",
+          "title": "Code Flow",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "flowVisualizerContainer": [
+        {
+          "id": "flowVisualizer.functionsSidebar",
+          "name": "Functions in Active File"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "flowVisualizer.refreshSidebar",
+        "title": "Refresh Functions",
+        "category": "Code Flow",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "flowVisualizer.reloadWorkspace",
+        "title": "Reload Workspace (re-read .sln/.csproj)",
+        "category": "Code Flow",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "flowVisualizer.showFlowAtCursor",
+        "title": "Show Call Flow for Function at Cursor",
+        "category": "Code Flow",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "flowVisualizer.selectRootFunction",
+        "title": "Show Call Flow",
+        "category": "Code Flow"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "flowVisualizer.refreshSidebar",
+          "when": "view == flowVisualizer.functionsSidebar",
+          "group": "navigation"
+        },
+        {
+          "command": "flowVisualizer.reloadWorkspace",
+          "when": "view == flowVisualizer.functionsSidebar",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "flowVisualizer.showFlowAtCursor",
+          "when": "editorLangId == csharp",
+          "group": "navigation@99"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "flowVisualizer.selectRootFunction",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Code Flow Visualizer",
+      "properties": {
+        "codeFlow.initialDepth": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 6,
+          "description": "How many call levels to load when a root function is selected. Deeper levels load on demand (right-click a node)."
+        },
+        "codeFlow.csharp.solutionPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the .sln/.slnx/.csproj to analyze (absolute or relative to the workspace folder). Empty = auto-detect."
+        },
+        "codeFlow.csharp.dotnetPath": {
+          "type": "string",
+          "default": "dotnet",
+          "description": "dotnet executable used to run the Roslyn analyzer daemon."
+        },
+        "codeFlow.ignorePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "\\.Log(Debug|Info|Information|Warning|Error|Trace|Critical)$",
+            "Logger\\."
+          ],
+          "description": "Regular expressions matched against 'Namespace.Type.Method'. Matching calls are hidden from the graph. Framework (System.*, Microsoft.*) calls are always hidden."
+        },
+        "codeFlow.layoutDirection": {
+          "type": "string",
+          "enum": [
+            "TB",
+            "LR"
+          ],
+          "default": "TB",
+          "description": "Graph direction: top-to-bottom or left-to-right."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:analyzer": "dotnet build analyzer-csharp/RoslynDaemon.csproj -c Release -o dist/analyzer",
+    "copy-libs": "node scripts/copy-libs.js",
+    "compile": "npm run copy-libs && tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "npm run build:analyzer && npm run compile",
+    "vscode:prepublish": "npm run build",
+    "package": "vsce package --allow-missing-repository --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "cytoscape": "3.30.4",
+    "cytoscape-dagre": "2.5.0",
+    "dagre": "0.8.5",
+    "typescript": "^5.6.3"
+  }
+}
